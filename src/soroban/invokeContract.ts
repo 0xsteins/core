@@ -1,6 +1,7 @@
 import { err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import { toMessage } from "../shared";
+import type { SorokitLogger } from "../shared/logger";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type { ContractInvokeParams, SorobanPollConfig } from "./types";
 import { prepareContractCall } from "./prepareCall";
@@ -30,6 +31,7 @@ export async function invokeContract(
   params: ContractInvokeParams,
   signFn: (xdr: string) => Promise<string>,
   pollConfig?: SorobanPollConfig,
+  logger?: SorokitLogger,
 ): Promise<SorokitResult<string>> {
   // ── Step 1: Prepare ────────────────────────────────────────────────────────
   const prepared = await prepareContractCall(
@@ -43,15 +45,31 @@ export async function invokeContract(
   // ── Step 2: Sign ───────────────────────────────────────────────────────────
   let signedXdr: string;
   try {
+    logger?.debug("soroban.invoke.sign", {
+      operation: "soroban.invoke.sign",
+      status: "start",
+      contractId: params.contractId,
+      method: params.method,
+    });
     signedXdr = await signFn(prepared.data.transactionXdr);
+    logger?.info("soroban.invoke.sign", {
+      operation: "soroban.invoke.sign",
+      status: "ok",
+      contractId: params.contractId,
+      method: params.method,
+    });
   } catch (cause) {
-    return err(
-      SorokitErrorCode.WALLET_SIGN_FAILED,
-      `Signing failed during contract invocation: ${toMessage(cause)}`,
-      cause,
-    );
+    const message = `Signing failed during contract invocation: ${toMessage(cause)}`;
+    logger?.warn("soroban.invoke.sign", {
+      operation: "soroban.invoke.sign",
+      status: "error",
+      contractId: params.contractId,
+      method: params.method,
+      errorMessage: message,
+    });
+    return err(SorokitErrorCode.WALLET_SIGN_FAILED, message, cause);
   }
 
   // ── Step 3: Execute ────────────────────────────────────────────────────────
-  return executeContract(rpcUrl, networkConfig, signedXdr, pollConfig);
+  return executeContract(rpcUrl, networkConfig, signedXdr, pollConfig, logger);
 }

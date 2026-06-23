@@ -1,21 +1,49 @@
 /**
- * Minimal structured logger for sorokit-core.
+ * Structured logger for sorokit-core.
  *
- * Off by default. Consumers opt in by passing `debug: true` to
- * createSorokitClient(). The logger never writes to a global sink —
- * it is scoped to the client instance.
+ * Off by default. Consumers opt in by passing `logLevel` to createSorokitClient().
+ * The logger never writes to a global sink — it is scoped to the client instance.
  */
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+import type { SorokitResult } from "./response";
 
-export interface SorokitLogger {
-  debug(message: string, meta?: Record<string, unknown>): void;
-  info(message: string, meta?: Record<string, unknown>): void;
-  warn(message: string, meta?: Record<string, unknown>): void;
-  error(message: string, meta?: Record<string, unknown>): void;
+export type LogLevel = "off" | "debug" | "info" | "warn" | "error";
+
+export interface StructuredLogMeta extends Record<string, unknown> {
+  operation?: string;
+  status?: "start" | "ok" | "error";
+  errorCode?: string;
+  errorMessage?: string;
 }
 
-/** No-op logger — used when debug mode is off */
+export interface SorokitLogger {
+  debug(message: string, meta?: StructuredLogMeta): void;
+  info(message: string, meta?: StructuredLogMeta): void;
+  warn(message: string, meta?: StructuredLogMeta): void;
+  error(message: string, meta?: StructuredLogMeta): void;
+}
+
+export interface LoggerConfig {
+  /** Minimum log level to emit. Default: "off" */
+  logLevel?: LogLevel;
+  /**
+   * Enable debug logging. Equivalent to `logLevel: "debug"`.
+   * @deprecated Prefer `logLevel: "debug"`
+   */
+  debug?: boolean;
+  /** Custom logger — overrides the built-in console logger */
+  logger?: SorokitLogger;
+}
+
+const LEVEL_PRIORITY: Record<LogLevel, number> = {
+  off: 0,
+  debug: 1,
+  info: 2,
+  warn: 3,
+  error: 4,
+};
+
+/** No-op logger — used when logging is off */
 const noopLogger: SorokitLogger = {
   debug: () => undefined,
   info: () => undefined,
@@ -23,13 +51,55 @@ const noopLogger: SorokitLogger = {
   error: () => undefined,
 };
 
-/** Console logger — used when debug mode is on */
-function createConsoleLogger(prefix = "[sorokit]"): SorokitLogger {
+function resolveLogLevel(config?: LoggerConfig | boolean): LogLevel {
+  if (typeof config === "boolean") {
+    return config ? "debug" : "off";
+  }
+  if (config?.logger) {
+    return config.logLevel ?? (config.debug ? "debug" : "off");
+  }
+  if (config?.logLevel) return config.logLevel;
+  if (config?.debug) return "debug";
+  return "off";
+}
+
+function formatStructuredEntry(
+  level: LogLevel,
+  message: string,
+  meta?: StructuredLogMeta,
+): Record<string, unknown> {
   return {
-    debug: (msg, meta) => console.debug(`${prefix} ${msg}`, meta ?? ""),
-    info: (msg, meta) => console.info(`${prefix} ${msg}`, meta ?? ""),
-    warn: (msg, meta) => console.warn(`${prefix} ${msg}`, meta ?? ""),
-    error: (msg, meta) => console.error(`${prefix} ${msg}`, meta ?? ""),
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...meta,
+  };
+}
+
+/** Console logger with level filtering and structured output */
+function createConsoleLogger(
+  minLevel: LogLevel,
+  prefix = "[sorokit]",
+): SorokitLogger {
+  const shouldLog = (msgLevel: LogLevel): boolean =>
+    minLevel !== "off" && LEVEL_PRIORITY[msgLevel] >= LEVEL_PRIORITY[minLevel];
+
+  const write =
+    (
+      msgLevel: LogLevel,
+      consoleFn: (message?: unknown, ...optionalParams: unknown[]) => void,
+    ) =>
+    (message: string, meta?: StructuredLogMeta): void => {
+      if (!shouldLog(msgLevel)) return;
+      const entry = formatStructuredEntry(msgLevel, message, meta);
+      consoleFn(prefix, entry);
+    };
+
+  return {
+    debug: write("debug", console.debug),
+    info: write("info", console.info),
+    warn: write("warn", console.warn),
+    error: write("error", console.error),
   };
 }
 
@@ -38,10 +108,42 @@ function createConsoleLogger(prefix = "[sorokit]"): SorokitLogger {
  * Pass a custom implementation to redirect logs to your own sink.
  */
 export function createLogger(
-  debug: boolean,
+  config?: LoggerConfig | boolean,
   custom?: SorokitLogger,
 ): SorokitLogger {
   if (custom) return custom;
-  if (debug) return createConsoleLogger();
-  return noopLogger;
+  if (typeof config === "object" && config?.logger) return config.logger;
+
+  const logLevel = resolveLogLevel(config);
+  if (logLevel === "off") return noopLogger;
+  return createConsoleLogger(logLevel);
+}
+
+/**
+ * Log the start and result of an async SDK operation.
+ * Emits debug on start, info on success, warn on handled errors.
+ */
+export async function withLogging<T>(
+  logger: SorokitLogger,
+  operation: string,
+  context: Record<string, unknown> | undefined,
+  fn: () => Promise<SorokitResult<T>>,
+): Promise<SorokitResult<T>> {
+  logger.debug(operation, { operation, status: "start", ...context });
+
+  const result = await fn();
+
+  if (result.status === "ok") {
+    logger.info(operation, { operation, status: "ok", ...context });
+  } else {
+    logger.warn(operation, {
+      operation,
+      status: "error",
+      errorCode: result.error.code,
+      errorMessage: result.error.message,
+      ...context,
+    });
+  }
+
+  return result;
 }

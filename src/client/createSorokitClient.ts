@@ -31,11 +31,11 @@ import { prepareContractCall } from "../soroban/prepareCall";
 import { simulateTransaction } from "../soroban/simulateTransaction";
 import { executeContract } from "../soroban/executeContract";
 import { invokeContract } from "../soroban/invokeContract";
-import { createLogger } from "../shared/logger";
+import { createLogger, withLogging } from "../shared/logger";
 import { formatAddress } from "../shared/utils";
 import { ok } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
-import type { SorokitLogger } from "../shared/logger";
+import type { LogLevel, SorokitLogger } from "../shared/logger";
 import type { SorokitCache } from "../shared/cache";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type { NetworkType } from "../network/config";
@@ -78,7 +78,15 @@ export interface SorokitClientConfig {
   rpcUrl?: string;
   /** Optional cache implementation — core is stateless by default */
   cache?: SorokitCache;
-  /** Enable debug logging to console. Default: false */
+  /**
+   * Minimum log level to emit. Default: "off"
+   * Set to "debug" for verbose tracing of all SDK operations.
+   */
+  logLevel?: LogLevel;
+  /**
+   * Enable debug logging to console. Equivalent to `logLevel: "debug"`.
+   * @deprecated Prefer `logLevel: "debug"`
+   */
   debug?: boolean;
   /** Custom logger — overrides the built-in console logger */
   logger?: SorokitLogger;
@@ -252,10 +260,16 @@ export function createSorokitClient(
 
   const networkConfig = networkResult.data;
   const { horizonUrl, rpcUrl, networkPassphrase } = networkConfig;
-  const logger = createLogger(config.debug ?? false, config.logger);
+  const logger =
+    config.logger ??
+    createLogger({
+      logLevel: config.logLevel ?? (config.debug ? "debug" : "off"),
+    });
   const defaultPollConfig = config.sorobanPoll;
 
-  logger.debug("Client created", {
+  logger.info("client.create", {
+    operation: "client.create",
+    status: "ok",
     network: config.network,
     horizonUrl,
     rpcUrl,
@@ -265,131 +279,114 @@ export function createSorokitClient(
     networkConfig,
 
     wallet: {
-      connect: (adapter) => {
-        logger.debug("wallet.connect", { walletType: adapter.walletType });
-        return connectWallet(adapter);
-      },
-      disconnect: (adapter) => {
-        logger.debug("wallet.disconnect", { walletType: adapter.walletType });
-        return disconnectWallet(adapter);
-      },
-      signTransaction: (adapter, input) => {
-        logger.debug("wallet.signTransaction", {
-          walletType: adapter.walletType,
-        });
-        return signTransaction(adapter, input);
-      },
+      connect: (adapter) =>
+        withLogging(logger, "wallet.connect", { walletType: adapter.walletType }, () =>
+          connectWallet(adapter),
+        ),
+      disconnect: (adapter) =>
+        withLogging(logger, "wallet.disconnect", { walletType: adapter.walletType }, () =>
+          disconnectWallet(adapter),
+        ),
+      signTransaction: (adapter, input) =>
+        withLogging(
+          logger,
+          "wallet.signTransaction",
+          { walletType: adapter.walletType },
+          () => signTransaction(adapter, input),
+        ),
       emptyState: () => emptyWalletState(),
     },
 
     account: {
-      get: (publicKey) => {
-        logger.debug("account.get", { publicKey });
-        return getAccount(horizonUrl, publicKey);
-      },
-      getBalances: (publicKey) => {
-        logger.debug("account.getBalances", { publicKey });
-        return getBalances(horizonUrl, publicKey);
-      },
-      getAssetBalances: (publicKey, filter) => {
-        logger.debug("account.getAssetBalances", { publicKey, filter });
-        return getAssetBalances(horizonUrl, publicKey, filter);
-      },
-      stream: (publicKey, config, signal) => {
-        logger.debug("account.stream", { publicKey });
-        return streamAccount(horizonUrl, publicKey, config, signal);
-      },
+      get: (publicKey) =>
+        withLogging(logger, "account.get", { publicKey }, () =>
+          getAccount(horizonUrl, publicKey),
+        ),
+      getBalances: (publicKey) =>
+        withLogging(logger, "account.getBalances", { publicKey }, () =>
+          getBalances(horizonUrl, publicKey),
+        ),
+      getAssetBalances: (publicKey, filter) =>
+        withLogging(logger, "account.getAssetBalances", { publicKey, filter }, () =>
+          getAssetBalances(horizonUrl, publicKey, filter),
+        ),
+      stream: (publicKey, streamConfig, signal) =>
+        streamAccount(horizonUrl, publicKey, streamConfig, signal, logger),
       formatAddress: (publicKey, chars) => formatAddress(publicKey, chars),
     },
 
     transaction: {
-      buildPayment: (sourcePublicKey, params) => {
-        logger.debug("transaction.buildPayment", { sourcePublicKey });
-        return buildPaymentTransaction(
-          horizonUrl,
-          networkConfig,
-          sourcePublicKey,
-          params,
-        );
-      },
-      buildCreateAccount: (sourcePublicKey, params) => {
-        logger.debug("transaction.buildCreateAccount", { sourcePublicKey });
-        return buildCreateAccountTransaction(
-          horizonUrl,
-          networkConfig,
-          sourcePublicKey,
-          params,
-        );
-      },
-      buildTrustline: (sourcePublicKey, params) => {
-        logger.debug("transaction.buildTrustline", { sourcePublicKey });
-        return buildTrustlineTransaction(
-          horizonUrl,
-          networkConfig,
-          sourcePublicKey,
-          params,
-        );
-      },
-      submit: (signedXdr) => {
-        logger.debug("transaction.submit");
-        return submitTransaction(horizonUrl, networkPassphrase, signedXdr);
-      },
-      getStatus: (hash) => {
-        logger.debug("transaction.getStatus", { hash });
-        return getTransactionStatus(horizonUrl, hash);
-      },
-      estimateFee: (input) => {
-        logger.debug("transaction.estimateFee");
-        return estimateFee(rpcUrl, horizonUrl, networkConfig, input);
-      },
-      stream: (publicKey, config, signal) => {
-        logger.debug("transaction.stream", { publicKey });
-        return streamTransactions(horizonUrl, publicKey, config, signal);
-      },
+      buildPayment: (sourcePublicKey, params) =>
+        withLogging(logger, "transaction.buildPayment", { sourcePublicKey }, () =>
+          buildPaymentTransaction(horizonUrl, networkConfig, sourcePublicKey, params),
+        ),
+      buildCreateAccount: (sourcePublicKey, params) =>
+        withLogging(logger, "transaction.buildCreateAccount", { sourcePublicKey }, () =>
+          buildCreateAccountTransaction(horizonUrl, networkConfig, sourcePublicKey, params),
+        ),
+      buildTrustline: (sourcePublicKey, params) =>
+        withLogging(logger, "transaction.buildTrustline", { sourcePublicKey }, () =>
+          buildTrustlineTransaction(horizonUrl, networkConfig, sourcePublicKey, params),
+        ),
+      submit: (signedXdr) =>
+        withLogging(logger, "transaction.submit", undefined, () =>
+          submitTransaction(horizonUrl, networkPassphrase, signedXdr),
+        ),
+      getStatus: (hash) =>
+        withLogging(logger, "transaction.getStatus", { hash }, () =>
+          getTransactionStatus(horizonUrl, hash),
+        ),
+      estimateFee: (input) =>
+        withLogging(logger, "transaction.estimateFee", { kind: input.kind }, () =>
+          estimateFee(rpcUrl, horizonUrl, networkConfig, input),
+        ),
+      stream: (publicKey, streamConfig, signal) =>
+        streamTransactions(horizonUrl, publicKey, streamConfig, signal, logger),
     },
 
     soroban: {
-      simulate: (transactionXdr) => {
-        logger.debug("soroban.simulate");
-        return simulateTransaction(rpcUrl, networkPassphrase, transactionXdr);
-      },
-      prepare: (params) => {
-        logger.debug("soroban.prepare", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return prepareContractCall(rpcUrl, networkConfig, horizonUrl, params);
-      },
-      execute: (signedXdr, pollConfig) => {
-        logger.debug("soroban.execute");
-        return executeContract(
+      simulate: (transactionXdr) =>
+        withLogging(logger, "soroban.simulate", undefined, () =>
+          simulateTransaction(rpcUrl, networkPassphrase, transactionXdr),
+        ),
+      prepare: (params) =>
+        withLogging(
+          logger,
+          "soroban.prepare",
+          { contractId: params.contractId, method: params.method },
+          () => prepareContractCall(rpcUrl, networkConfig, horizonUrl, params),
+        ),
+      execute: (signedXdr, pollConfig) =>
+        executeContract(
           rpcUrl,
           networkConfig,
           signedXdr,
           pollConfig ?? defaultPollConfig,
-        );
-      },
-      invoke: (params, signFn, pollConfig) => {
-        logger.debug("soroban.invoke", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return invokeContract(
-          rpcUrl,
-          networkConfig,
-          horizonUrl,
-          params,
-          signFn,
-          pollConfig ?? defaultPollConfig,
-        );
-      },
-      read: (params) => {
-        logger.debug("soroban.read", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return readContract(rpcUrl, horizonUrl, networkConfig, params);
-      },
+          logger,
+        ),
+      invoke: (params, signFn, pollConfig) =>
+        withLogging(
+          logger,
+          "soroban.invoke",
+          { contractId: params.contractId, method: params.method },
+          () =>
+            invokeContract(
+              rpcUrl,
+              networkConfig,
+              horizonUrl,
+              params,
+              signFn,
+              pollConfig ?? defaultPollConfig,
+              logger,
+            ),
+        ),
+      read: (params) =>
+        withLogging(
+          logger,
+          "soroban.read",
+          { contractId: params.contractId, method: params.method },
+          () => readContract(rpcUrl, horizonUrl, networkConfig, params),
+        ),
     },
 
     network: {

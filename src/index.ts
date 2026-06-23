@@ -65,5 +65,5 @@ export type {
 // ─── Response system ──────────────────────────────────────────────────────────
 export type { SorokitResult, SorokitError } from "./shared/response";
 export { SorokitErrorCode, ok, err, isOk, isErr } from "./shared/response";
-export type { SorokitLogger } from "./shared/logger";
+export type { SorokitLogger, LogLevel, LoggerConfig } from "./shared/logger";
 export type { SorokitCache } from "./shared/cache";
