@@ -20,3 +20,6 @@ export const DEFAULT_ADDRESS_DISPLAY_CHARS = 4;
 
 /** Default cache TTL for fee estimates in milliseconds (5 minutes) */
 export const DEFAULT_FEE_CACHE_TTL_MS = 300_000;
+
+/** Default cache TTL for submitted transaction results in milliseconds (10 minutes) */
+export const DEFAULT_TX_CACHE_TTL_MS = 600_000;
