@@ -1,5 +1,7 @@
 /** @deprecated Import from '../soroban/types' directly. */
 export type {
+  ContractMethod,
+  ContractMethodInput,
   ContractInvokeParams,
   ContractReadParams,
   ContractCallResult,

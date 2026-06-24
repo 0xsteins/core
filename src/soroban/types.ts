@@ -3,10 +3,22 @@
  */
 import type { xdr } from "@stellar/stellar-sdk";
 
+export interface ContractMethodInput {
+  name: string;
+  type: string;
+}
+
+export interface ContractMethod {
+  name: string;
+  inputs: ContractMethodInput[];
+  returnType: string | null;
+}
+
 export interface ContractInvokeParams {
   contractId: string;
   method: string;
   args?: xdr.ScVal[];
+  cachedMetadata?: ContractMethod[];
   /** Public key of the invoking account */
   publicKey: string;
 }
@@ -15,6 +27,7 @@ export interface ContractReadParams {
   contractId: string;
   method: string;
   args?: xdr.ScVal[];
+  cachedMetadata?: ContractMethod[];
   /**
    * Public key of a funded account to use as the simulation source.
    * Required — the Soroban RPC needs a real account to simulate against.

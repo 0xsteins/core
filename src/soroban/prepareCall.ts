@@ -11,6 +11,7 @@ import { toMessage } from "../shared";
 import { DEFAULT_TX_TIMEOUT_SECONDS } from "../shared/constants";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type { ContractInvokeParams, PreparedContractCall } from "./types";
+import { validateContractMethodMetadata } from "./contractMetadata";
 
 /**
  * Prepare step of the Soroban invoke pipeline.
@@ -28,6 +29,14 @@ export async function prepareContractCall(
   horizonUrl: string,
   params: ContractInvokeParams,
 ): Promise<SorokitResult<PreparedContractCall>> {
+  const metadataResult = validateContractMethodMetadata(
+    params.cachedMetadata,
+    params.method,
+    params.args?.length ?? 0,
+    SorokitErrorCode.CONTRACT_PREPARE_FAILED,
+  );
+  if (metadataResult.status === "error") return metadataResult;
+
   try {
     const rpc = new SorobanRpc.Server(rpcUrl);
     const horizonServer = new Horizon.Server(horizonUrl);

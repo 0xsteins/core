@@ -12,6 +12,7 @@ import { toMessage } from "../shared";
 import { DEFAULT_TX_TIMEOUT_SECONDS } from "../shared/constants";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type { ContractReadParams, ContractCallResult } from "./types";
+import { validateContractMethodMetadata } from "./contractMetadata";
 
 /**
  * Read contract data — view/read-only call, no signing required.
@@ -25,6 +26,14 @@ export async function readContract(
   networkConfig: ResolvedNetworkConfig,
   params: ContractReadParams,
 ): Promise<SorokitResult<ContractCallResult>> {
+  const metadataResult = validateContractMethodMetadata(
+    params.cachedMetadata,
+    params.method,
+    params.args?.length ?? 0,
+    SorokitErrorCode.CONTRACT_READ_FAILED,
+  );
+  if (metadataResult.status === "error") return metadataResult;
+
   try {
     const rpc = new SorobanRpc.Server(rpcUrl);
     const horizonServer = new Horizon.Server(horizonUrl);
