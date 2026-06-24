@@ -10,6 +10,7 @@ import { ok, err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import { toMessage } from "../shared";
 import { validateIssuer } from "../shared/validateIssuer";
+import { isNetworkConnectivityError, isTimeoutError, toMessage } from "../shared";
 import { DEFAULT_TX_TIMEOUT_SECONDS } from "../shared/constants";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type {
@@ -19,6 +20,16 @@ import type {
   PaymentWithTrustlineParams,
   SwapTransactionParams,
 } from "./types";
+
+function describeTransactionBuildFailure(action: string, cause: unknown): string {
+  if (isTimeoutError(cause)) {
+    return `Failed to build ${action} transaction because Horizon timed out: ${toMessage(cause)}`;
+  }
+  if (isNetworkConnectivityError(cause)) {
+    return `Failed to build ${action} transaction due to network connectivity: ${toMessage(cause)}`;
+  }
+  return `Failed to build ${action} transaction: ${toMessage(cause)}`;
+}
 
 /**
  * Resolve an asset from code + optional issuer.
@@ -99,7 +110,7 @@ export async function buildPaymentTransaction(
   } catch (cause) {
     return err(
       SorokitErrorCode.TX_BUILD_FAILED,
-      `Failed to build payment transaction: ${toMessage(cause)}`,
+      describeTransactionBuildFailure("payment", cause),
       cause,
     );
   }
@@ -135,7 +146,7 @@ export async function buildCreateAccountTransaction(
   } catch (cause) {
     return err(
       SorokitErrorCode.TX_BUILD_FAILED,
-      `Failed to build create account transaction: ${toMessage(cause)}`,
+      describeTransactionBuildFailure("create account", cause),
       cause,
     );
   }
@@ -191,7 +202,7 @@ export async function buildTrustlineTransaction(
   } catch (cause) {
     return err(
       SorokitErrorCode.TX_BUILD_FAILED,
-      `Failed to build trustline transaction: ${toMessage(cause)}`,
+      describeTransactionBuildFailure("trustline", cause),
       cause,
     );
   }
@@ -252,7 +263,7 @@ export async function buildPaymentWithTrustline(
   } catch (cause) {
     return err(
       SorokitErrorCode.TX_BUILD_FAILED,
-      `Failed to build payment with trustline transaction: ${toMessage(cause)}`,
+      describeTransactionBuildFailure("payment with trustline", cause),
       cause,
     );
   }
@@ -312,7 +323,7 @@ export async function buildSwapTransaction(
   } catch (cause) {
     return err(
       SorokitErrorCode.TX_BUILD_FAILED,
-      `Failed to build swap transaction: ${toMessage(cause)}`,
+      describeTransactionBuildFailure("swap", cause),
       cause,
     );
   }

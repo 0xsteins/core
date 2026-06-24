@@ -16,6 +16,7 @@ export type {
 export { FreighterAdapter } from "./wallet/adapters/freighter";
 export { XBullAdapter } from "./wallet/adapters/xbull";
 export { LobstrAdapter } from "./wallet/adapters/lobstr";
+export { collectMultiSignatures } from "./wallet";
 
 // ─── Wallet types ─────────────────────────────────────────────────────────────
 export type {
@@ -54,6 +55,8 @@ export type {
 
 // ─── Soroban types ────────────────────────────────────────────────────────────
 export type {
+  ContractMethod,
+  ContractMethodInput,
   ContractAbi,
   ContractAbiMethod,
   ContractInvokeParams,

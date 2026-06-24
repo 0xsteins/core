@@ -6,11 +6,15 @@ import {
   isValidContractId,
   toMessage,
   isNotFoundError,
+  isNetworkConnectivityError,
   isUserRejection,
   isTransientError,
+  isTimeoutError,
+  isXdrInvalidError,
   applyErrorHandler,
   withErrorHandling,
   retryWithBackoff,
+  deduplicateRequest,
   type RetryConfig,
   type ErrorHandler,
   type ErrorContext,
@@ -168,6 +172,94 @@ describe("shared/errors", () => {
 
     it("returns false for permanent errors", () => {
       expect(isTransientError(new Error("Invalid parameters"))).toBe(false);
+    });
+  });
+
+  describe("isTimeoutError", () => {
+    it("detects AbortError", () => {
+      const error = Object.assign(new Error("The operation was aborted"), {
+        name: "AbortError",
+      });
+
+      expect(isTimeoutError(error)).toBe(true);
+    });
+
+    it("detects ETIMEDOUT code", () => {
+      expect(isTimeoutError({ code: "ETIMEDOUT" })).toBe(true);
+    });
+
+    it("detects RPC deadline messages", () => {
+      expect(isTimeoutError(new Error("RPC deadline exceeded"))).toBe(true);
+    });
+
+    it("returns false for non-timeout errors", () => {
+      expect(isTimeoutError(new Error("Invalid parameters"))).toBe(false);
+      expect(isTimeoutError({ response: { status: 404 } })).toBe(false);
+    });
+  });
+
+  describe("isNetworkConnectivityError", () => {
+    it("detects DNS and connection failures by code", () => {
+      expect(isNetworkConnectivityError({ code: "ENOTFOUND" })).toBe(true);
+      expect(isNetworkConnectivityError({ code: "ECONNREFUSED" })).toBe(true);
+    });
+
+    it("detects fetch/network failure messages", () => {
+      expect(isNetworkConnectivityError(new Error("fetch failed"))).toBe(true);
+      expect(isNetworkConnectivityError(new Error("Network error"))).toBe(true);
+    });
+
+    it("does not treat RPC service responses as connectivity failures", () => {
+      expect(isNetworkConnectivityError({ response: { status: 500 } })).toBe(
+        false,
+      );
+      expect(isNetworkConnectivityError({ response: { status: 404 } })).toBe(
+        false,
+      );
+    });
+
+    it("returns false for wallet rejection", () => {
+      expect(isNetworkConnectivityError(new Error("User rejected request"))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("isXdrInvalidError", () => {
+    it("detects empty and invalid-character XDR strings", () => {
+      expect(isXdrInvalidError("")).toBe(true);
+      expect(isXdrInvalidError("not valid xdr!")).toBe(true);
+    });
+
+    it("detects Stellar SDK XDR parse errors", () => {
+      expect(isXdrInvalidError(new Error("invalid xdr"))).toBe(true);
+      expect(isXdrInvalidError(new Error("XDR decode failed: read past end"))).toBe(
+        true,
+      );
+    });
+
+    it("detects malformed XDR errors thrown by TransactionBuilder.fromXDR", () => {
+      expect(
+        isXdrInvalidError(
+          new TypeError(
+            "XDR Read Error: attempt to read outside the boundary of the buffer",
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        isXdrInvalidError(
+          new TypeError("XDR Read Error: unknown EnvelopeType member for value -1635029142"),
+        ),
+      ).toBe(true);
+    });
+
+    it("returns false for plausible base64 XDR input", () => {
+      expect(isXdrInvalidError("AAAAAQAAAAA=")).toBe(false);
+    });
+
+    it("returns false for unrelated timeout and network errors", () => {
+      expect(isXdrInvalidError(new Error("Request timeout"))).toBe(false);
+      expect(isXdrInvalidError(new Error("fetch failed"))).toBe(false);
     });
   });
 
@@ -357,5 +449,83 @@ describe("retryWithBackoff", () => {
 
     expect(fn).toHaveBeenCalledTimes(3);
     expect(elapsed).toBeGreaterThanOrEqual(150);
+  });
+});
+
+describe("shared/utils — deduplicateRequest (#24)", () => {
+  it("returns the resolved value", async () => {
+    const result = await deduplicateRequest("key-1", () => Promise.resolve("value"));
+    expect(result).toBe("value");
+  });
+
+  it("concurrent calls with the same key share a single Promise", async () => {
+    let callCount = 0;
+    const fn = () => new Promise<string>((resolve) => {
+      callCount++;
+      setTimeout(() => resolve("shared"), 10);
+    });
+
+    const [a, b] = await Promise.all([
+      deduplicateRequest("key-concurrent", fn),
+      deduplicateRequest("key-concurrent", fn),
+    ]);
+
+    expect(a).toBe("shared");
+    expect(b).toBe("shared");
+    expect(callCount).toBe(1); // Only one underlying call was made
+  });
+
+  it("concurrent calls with different keys are independent", async () => {
+    let callCount = 0;
+    const fn = (suffix: string) => () => new Promise<string>((resolve) => {
+      callCount++;
+      setTimeout(() => resolve(suffix), 10);
+    });
+
+    const [a, b] = await Promise.all([
+      deduplicateRequest("key-a", fn("a")),
+      deduplicateRequest("key-b", fn("b")),
+    ]);
+
+    expect(a).toBe("a");
+    expect(b).toBe("b");
+    expect(callCount).toBe(2);
+  });
+
+  it("removes the in-flight entry after resolution so the next call runs fresh", async () => {
+    let callCount = 0;
+    const fn = () => Promise.resolve(++callCount);
+
+    await deduplicateRequest("key-seq", fn);
+    await deduplicateRequest("key-seq", fn);
+
+    expect(callCount).toBe(2); // Each sequential call triggers a new request
+  });
+
+  it("propagates rejections and cleans up the in-flight entry", async () => {
+    let callCount = 0;
+    const fn = () => {
+      callCount++;
+      return Promise.reject(new Error("boom"));
+    };
+
+    await expect(deduplicateRequest("key-fail", fn)).rejects.toThrow("boom");
+    // After rejection, the entry is removed — next call starts fresh
+    await expect(deduplicateRequest("key-fail", fn)).rejects.toThrow("boom");
+    expect(callCount).toBe(2);
+  });
+
+  it("concurrent callers all receive the rejection", async () => {
+    const fn = () => new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error("shared-err")), 5),
+    );
+
+    const results = await Promise.allSettled([
+      deduplicateRequest("key-shared-fail", fn),
+      deduplicateRequest("key-shared-fail", fn),
+    ]);
+
+    expect(results[0]?.status).toBe("rejected");
+    expect(results[1]?.status).toBe("rejected");
   });
 });
