@@ -35,7 +35,14 @@ export { NETWORK_DEFAULTS } from "./network/config";
 export type { ResolvedNetworkConfig } from "./shared/types";
 
 // ─── Account types ────────────────────────────────────────────────────────────
-export type { AccountInfo, AssetBalance } from "./account/types";
+export type {
+  AccountInfo,
+  AssetBalance,
+  BalanceAlert,
+  BalanceAlertRule,
+  BalanceAlertCondition,
+} from "./account/types";
+export { evaluateBalanceAlerts } from "./account/balanceAlerts";
 export type { AssetBalanceFilter } from "./account/getAssetBalances";
 export type { AccountStreamConfig } from "./account/streamAccount";
 
