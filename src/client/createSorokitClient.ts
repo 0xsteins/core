@@ -31,6 +31,7 @@ import { prepareContractCall } from "../soroban/prepareCall";
 import { simulateTransaction } from "../soroban/simulateTransaction";
 import { executeContract } from "../soroban/executeContract";
 import { invokeContract } from "../soroban/invokeContract";
+import { getContractMethods } from "../soroban/contractMetadata";
 import { createLogger, withLogging } from "../shared/logger";
 import { formatAddress } from "../shared/utils";
 import { ok } from "../shared/response";
@@ -61,6 +62,7 @@ import type {
   TransactionPage,
 } from "../transaction/streamTransactions";
 import type {
+  ContractMethod,
   ContractInvokeParams,
   ContractReadParams,
   ContractCallResult,
@@ -98,6 +100,8 @@ export interface SorokitClientConfig {
   onFeeSurge?: FeeEstimateOptions["onFeeSurge"];
   /** Optional error handler for centralized error processing and recovery */
   errorHandler?: ErrorHandler;
+  /** Trusted asset issuers whitelist — null means no whitelist (all issuers allowed) */
+  trustedIssuers?: string[];
 }
 
 // ─── Client interface ─────────────────────────────────────────────────────────
@@ -105,6 +109,8 @@ export interface SorokitClientConfig {
 export interface SorokitClient {
   /** Resolved network configuration for this client instance */
   readonly networkConfig: ResolvedNetworkConfig;
+  /** Trusted asset issuers whitelist — null means no whitelist (all issuers allowed) */
+  readonly trustedIssuers: string[] | null;
 
   readonly wallet: {
     /** Connect and return WalletState */
@@ -189,6 +195,11 @@ export interface SorokitClient {
   };
 
   readonly soroban: {
+    /** Discover available contract methods and cache metadata by contract ID */
+    getContractMethods(
+      contractId: string,
+      ttlMs?: number,
+    ): Promise<SorokitResult<ContractMethod[]>>;
     /**
      * Simulate any transaction XDR for fee estimation and pre-flight checks.
      * Uses the Soroban RPC.
@@ -290,6 +301,7 @@ export function createSorokitClient(
 
   const client: SorokitClient = {
     networkConfig,
+    trustedIssuers: config.trustedIssuers ?? null,
 
     wallet: {
       connect: (adapter) =>
@@ -351,6 +363,7 @@ export function createSorokitClient(
           networkConfig,
           sourcePublicKey,
           params,
+          client.trustedIssuers,
         );
       },
       buildCreateAccount: (sourcePublicKey, params) => {
@@ -369,6 +382,7 @@ export function createSorokitClient(
           networkConfig,
           sourcePublicKey,
           params,
+          client.trustedIssuers,
         );
       },
       submit: (signedXdr) => {
@@ -390,6 +404,17 @@ export function createSorokitClient(
     },
 
     soroban: {
+      getContractMethods: (contractId, ttlMs) =>
+        withLogging(
+          logger,
+          "soroban.getContractMethods",
+          { contractId },
+          () =>
+            getContractMethods(rpcUrl, contractId, {
+              ...(config.cache && { cache: config.cache }),
+              ...(ttlMs !== undefined && { ttlMs }),
+            }),
+        ),
       simulate: (transactionXdr) =>
         withErrorHandling(
           errorHandler,

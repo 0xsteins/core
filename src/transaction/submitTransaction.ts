@@ -1,4 +1,4 @@
-import { Horizon, TransactionBuilder } from "@stellar/stellar-sdk";
+import { Horizon, TransactionBuilder, Keypair, FeeBumpTransaction } from "@stellar/stellar-sdk";
 import { ok, err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import {
@@ -26,8 +26,45 @@ function describeSubmissionFailure(cause: unknown): string {
 }
 
 /**
+ * Verify that signatures in the parsed transaction were made for the given
+ * networkPassphrase by checking the source account's signature hint.
+ * Returns true when a mismatch is detected (signatures don't verify for this network).
+ * Returns false when the check passes or cannot be performed (falls back to Horizon).
+ */
+function detectNetworkPassphraseMismatch(
+  tx: ReturnType<typeof TransactionBuilder.fromXDR>,
+  networkPassphrase: string,
+): boolean {
+  const source = tx instanceof FeeBumpTransaction ? tx.feeSource : tx.source;
+
+  // Muxed accounts (M...) require extra decoding — skip and let Horizon validate.
+  if (!source || source.startsWith("M")) return false;
+
+  try {
+    const keypair = Keypair.fromPublicKey(source);
+    const expectedHash = tx.hash();
+    const hint = keypair.rawPublicKey().slice(-4);
+
+    for (const decoratedSig of tx.signatures) {
+      if (!decoratedSig.hint().equals(hint)) continue;
+      // This signature claims to be from the source account.
+      // If it doesn't verify for the given network, the transaction was signed for a different network.
+      try {
+        if (!keypair.verify(expectedHash, decoratedSig.signature())) return true;
+      } catch {
+        return true;
+      }
+    }
+  } catch {
+    // If key parsing or verification fails in an unexpected way, fall through.
+  }
+
+  return false;
+}
+
+/**
  * Submit a signed transaction XDR to the Stellar network via Horizon.
- * Parses the XDR before submission — no unsafe casts.
+ * Validates the network passphrase before submission to catch testnet/mainnet mismatches early.
  */
 export async function submitTransaction(
   horizonUrl: string,
@@ -44,9 +81,17 @@ export async function submitTransaction(
   }
 
   try {
+    const tx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
+
+    if (detectNetworkPassphraseMismatch(tx, networkPassphrase)) {
+      return err(
+        SorokitErrorCode.TX_SUBMIT_FAILED,
+        `Network passphrase mismatch: the transaction was signed for a different network. Expected: "${networkPassphrase}".`,
+      );
+    }
+
     const response = await retryWithBackoff(async () => {
       const server = new Horizon.Server(horizonUrl);
-      const tx = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
       return await server.submitTransaction(tx);
     });
 

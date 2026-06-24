@@ -16,6 +16,15 @@ type StreamableTransactionStatus = Extract<
   "success" | "failed" | "pending"
 >;
 
+function sameSnapshot(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Configuration for transaction streaming.
  */
@@ -219,7 +228,6 @@ export async function* streamTransactions(
     maxIntervalMs,
   );
   let unchangedPolls = 0;
-  let lastSnapshot: string | null = null;
 
   const adjustInterval = (changed: boolean): void => {
     if (!adaptiveEnabled) return;
@@ -248,7 +256,7 @@ export async function* streamTransactions(
     operation: "transaction.stream",
     status: "start",
     publicKey,
-    intervalMs: baseIntervalMs,
+    intervalMs: currentIntervalMs,
     maxPolls,
     limit,
     offset,
@@ -324,7 +332,16 @@ export async function* streamTransactions(
         nextCursor,
       });
 
-      yield ok({ transactions: filteredTransactions, nextCursor });
+      const transactionPage = { transactions: filteredTransactions, nextCursor };
+      const hasBaseline = lastEmitted !== undefined;
+      const changed = !hasBaseline || !sameSnapshot(lastEmitted, transactionPage);
+      if (hasBaseline) adjustInterval(changed);
+      cursor = nextCursor ?? cursor;
+
+      if (changed) {
+        lastEmitted = transactionPage;
+        yield ok(transactionPage);
+      }
     } catch (cause) {
       const code = isNotFoundError(cause)
         ? SorokitErrorCode.ACCOUNT_NOT_FOUND
@@ -342,6 +359,7 @@ export async function* streamTransactions(
         errorMessage: message,
       });
 
+      adjustInterval(false);
       yield err(code, message, cause);
     }
 

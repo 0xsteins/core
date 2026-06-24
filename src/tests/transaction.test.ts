@@ -248,6 +248,7 @@ function makeHorizonRecord(
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+
 describe("transaction streaming filters", () => {
   it("returns the first page with default pagination when no filters are provided", () => {
     const result = applyTransactionFilters(TRANSACTION_FIXTURES);
@@ -916,7 +917,7 @@ describe("transaction caching", () => {
       expect(mockCache.set).toHaveBeenCalledWith(
         "tx:test_hash",
         expect.objectContaining({ hash: "test_hash" }),
-        10 * 60 * 1000,
+        DEFAULT_FEE_CACHE_TTL_MS,
       );
     });
 
