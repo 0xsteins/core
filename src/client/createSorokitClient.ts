@@ -94,6 +94,8 @@ export interface SorokitClientConfig {
   sorobanPoll?: SorobanPollConfig;
   /** Invoked when estimateFee detects a fee surge (>2x recent median) */
   onFeeSurge?: FeeEstimateOptions["onFeeSurge"];
+  /** Optional whitelist of trusted asset issuer addresses. If set, only assets from these issuers are allowed. */
+  trustedIssuers?: string[];
 }
 
 // ─── Client interface ─────────────────────────────────────────────────────────
@@ -101,6 +103,8 @@ export interface SorokitClientConfig {
 export interface SorokitClient {
   /** Resolved network configuration for this client instance */
   readonly networkConfig: ResolvedNetworkConfig;
+  /** Trusted asset issuers whitelist — null means no whitelist (all issuers allowed) */
+  readonly trustedIssuers: string[] | null;
 
   readonly wallet: {
     /** Connect and return WalletState */
@@ -285,6 +289,7 @@ export function createSorokitClient(
 
   const client: SorokitClient = {
     networkConfig,
+    trustedIssuers: config.trustedIssuers ?? null,
 
     wallet: {
       connect: (adapter) =>
@@ -316,7 +321,7 @@ export function createSorokitClient(
         ),
       getAssetBalances: (publicKey, filter) =>
         withLogging(logger, "account.getAssetBalances", { publicKey, filter }, () =>
-          getAssetBalances(horizonUrl, publicKey, filter),
+          getAssetBalances(horizonUrl, publicKey, filter, client.trustedIssuers),
         ),
       stream: (publicKey, streamConfig, signal) =>
         streamAccount(horizonUrl, publicKey, streamConfig, signal, logger),
@@ -331,6 +336,7 @@ export function createSorokitClient(
           networkConfig,
           sourcePublicKey,
           params,
+          client.trustedIssuers,
         );
       },
       buildCreateAccount: (sourcePublicKey, params) => {
@@ -349,6 +355,7 @@ export function createSorokitClient(
           networkConfig,
           sourcePublicKey,
           params,
+          client.trustedIssuers,
         );
       },
       submit: (signedXdr) => {

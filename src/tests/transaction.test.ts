@@ -108,6 +108,43 @@ function makeCacheWithHit(xdr: string, value: FeeEstimate): SorokitCache & {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+// ─── Additional mocks for transaction building ────────────────────────────────
+
+const buildMocks = vi.hoisted(() => ({
+  loadAccount: vi.fn(),
+  build: vi.fn(),
+  toXDR: vi.fn(),
+}));
+
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    Horizon: {
+      ...actual.Horizon,
+      Server: vi.fn().mockImplementation(() => ({
+        simulateTransaction: mocks.simulateTransaction,
+        loadAccount: buildMocks.loadAccount,
+      })),
+    },
+    rpc: {
+      ...actual.rpc,
+      Server: vi.fn().mockImplementation(() => ({
+        simulateTransaction: mocks.simulateTransaction,
+      })),
+      Api: {
+        ...actual.rpc.Api,
+        isSimulationSuccess: mocks.isSimulationSuccess,
+        isSimulationError: mocks.isSimulationError,
+      },
+    },
+    TransactionBuilder: {
+      ...actual.TransactionBuilder,
+      fromXDR: mocks.fromXDR,
+    },
+  };
+});
+
 describe("estimateFee — caching", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -313,5 +350,185 @@ describe("estimateFee — caching", () => {
         expect(result.data.simulated).toBe(false);
       }
     });
+  });
+});
+
+describe("buildPaymentTransaction — issuer whitelisting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Setup default mock for Horizon loadAccount
+    buildMocks.loadAccount.mockResolvedValue({
+      accountId: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      sequence: "0",
+      incrementSequenceNumber: vi.fn(),
+    });
+  });
+
+  it("builds transaction when issuer is whitelisted", async () => {
+    const { buildPaymentTransaction } = await import("../transaction/buildTransaction");
+    const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildPaymentTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        destination: "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN",
+        assetCode: "USDC",
+        assetIssuer: trustedIssuer,
+        amount: "100",
+      },
+      [trustedIssuer],
+    );
+
+    expect(result.status).toBe("ok");
+  });
+
+  it("rejects transaction when issuer not whitelisted", async () => {
+    const { buildPaymentTransaction } = await import("../transaction/buildTransaction");
+    const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+    const untrustedIssuer = "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN";
+
+    const result = await buildPaymentTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        destination: "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN",
+        assetCode: "USDC",
+        assetIssuer: untrustedIssuer,
+        amount: "100",
+      },
+      [trustedIssuer],
+    );
+
+    expect(result.status).toBe("error");
+    expect((result as any).error.code).toBe("TX_BUILD_FAILED");
+    expect((result as any).error.message).toContain("not in the trusted issuers whitelist");
+  });
+
+  it("builds transaction when no whitelist configured", async () => {
+    const { buildPaymentTransaction } = await import("../transaction/buildTransaction");
+    const anyIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildPaymentTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        destination: "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN",
+        assetCode: "USDC",
+        assetIssuer: anyIssuer,
+        amount: "100",
+      },
+      null,
+    );
+
+    expect(result.status).toBe("ok");
+  });
+
+  it("allows native XLM transactions without whitelist check", async () => {
+    const { buildPaymentTransaction } = await import("../transaction/buildTransaction");
+    const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildPaymentTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        destination: "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN",
+        assetCode: "XLM",
+        amount: "100",
+      },
+      [trustedIssuer],
+    );
+
+    expect(result.status).toBe("ok");
+  });
+});
+
+describe("buildTrustlineTransaction — issuer whitelisting", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    buildMocks.loadAccount.mockResolvedValue({
+      accountId: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      sequence: "0",
+      incrementSequenceNumber: vi.fn(),
+    });
+  });
+
+  it("builds transaction when issuer is whitelisted", async () => {
+    const { buildTrustlineTransaction } = await import("../transaction/buildTransaction");
+    const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildTrustlineTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        assetCode: "USDC",
+        assetIssuer: trustedIssuer,
+      },
+      [trustedIssuer],
+    );
+
+    expect(result.status).toBe("ok");
+  });
+
+  it("rejects trustline for untrusted issuer", async () => {
+    const { buildTrustlineTransaction } = await import("../transaction/buildTransaction");
+    const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+    const untrustedIssuer = "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN";
+
+    const result = await buildTrustlineTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        assetCode: "USDC",
+        assetIssuer: untrustedIssuer,
+      },
+      [trustedIssuer],
+    );
+
+    expect(result.status).toBe("error");
+    expect((result as any).error.code).toBe("TX_BUILD_FAILED");
+    expect((result as any).error.message).toContain("not in the trusted issuers whitelist");
+  });
+
+  it("builds trustline when no whitelist configured", async () => {
+    const { buildTrustlineTransaction } = await import("../transaction/buildTransaction");
+    const anyIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildTrustlineTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        assetCode: "USDC",
+        assetIssuer: anyIssuer,
+      },
+      null,
+    );
+
+    expect(result.status).toBe("ok");
+  });
+
+  it("builds trustline with empty whitelist (backward compatible)", async () => {
+    const { buildTrustlineTransaction } = await import("../transaction/buildTransaction");
+    const anyIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+
+    const result = await buildTrustlineTransaction(
+      networkConfig.horizonUrl,
+      networkConfig,
+      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+      {
+        assetCode: "USDC",
+        assetIssuer: anyIssuer,
+      },
+      [],
+    );
+
+    expect(result.status).toBe("ok");
   });
 });

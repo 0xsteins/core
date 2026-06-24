@@ -209,4 +209,110 @@ describe("account", () => {
       expect(results.length).toBe(2);
     }, 10_000);
   });
+
+  describe("getAssetBalances — issuer whitelisting", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it("allows all issuers when trustedIssuers not configured", async () => {
+      const { getAssetBalances } = await import("../account/getAssetBalances");
+      const { getAccount } = await import("../account/getAccount");
+      const { ok } = await import("../shared/response");
+
+      const account = {
+        publicKey: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+        displayAddress: "GAAZI...CWNA",
+        sequence: "1",
+        subentryCount: 0,
+        balances: [
+          { assetType: "native" as const, assetCode: "XLM", assetIssuer: null, balance: "100", balanceFloat: 100 },
+          { assetType: "credit_alphanum4" as const, assetCode: "USDC", assetIssuer: "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA", balance: "50", balanceFloat: 50 },
+        ],
+      };
+
+      vi.mocked(getAccount).mockResolvedValueOnce(ok(account));
+
+      const result = await getAssetBalances("http://horizon", account.publicKey, undefined, null);
+
+      expect(result.status).toBe("ok");
+      expect((result as any).data).toHaveLength(2);
+    });
+
+    it("allows asset when issuer is in whitelist", async () => {
+      const { getAssetBalances } = await import("../account/getAssetBalances");
+      const { getAccount } = await import("../account/getAccount");
+      const { ok } = await import("../shared/response");
+
+      const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+      const account = {
+        publicKey: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+        displayAddress: "GAAZI...CWNA",
+        sequence: "1",
+        subentryCount: 0,
+        balances: [
+          { assetType: "native" as const, assetCode: "XLM", assetIssuer: null, balance: "100", balanceFloat: 100 },
+          { assetType: "credit_alphanum4" as const, assetCode: "USDC", assetIssuer: trustedIssuer, balance: "50", balanceFloat: 50 },
+        ],
+      };
+
+      vi.mocked(getAccount).mockResolvedValueOnce(ok(account));
+
+      const result = await getAssetBalances("http://horizon", account.publicKey, undefined, [trustedIssuer]);
+
+      expect(result.status).toBe("ok");
+      expect((result as any).data).toHaveLength(2);
+    });
+
+    it("returns error when issuer is not in whitelist", async () => {
+      const { getAssetBalances } = await import("../account/getAssetBalances");
+      const { getAccount } = await import("../account/getAccount");
+      const { ok } = await import("../shared/response");
+
+      const trustedIssuer = "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA";
+      const untrustedIssuer = "GBBD47UZQ5JAKVEWZNRPA7MKSTIRZU27I27ULMOWVNQZLB助ZZW7QTXN";
+      const account = {
+        publicKey: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+        displayAddress: "GAAZI...CWNA",
+        sequence: "1",
+        subentryCount: 0,
+        balances: [
+          { assetType: "native" as const, assetCode: "XLM", assetIssuer: null, balance: "100", balanceFloat: 100 },
+          { assetType: "credit_alphanum4" as const, assetCode: "USDC", assetIssuer: untrustedIssuer, balance: "50", balanceFloat: 50 },
+        ],
+      };
+
+      vi.mocked(getAccount).mockResolvedValueOnce(ok(account));
+
+      const result = await getAssetBalances("http://horizon", account.publicKey, undefined, [trustedIssuer]);
+
+      expect(result.status).toBe("error");
+      expect((result as any).error.code).toBe("TX_BUILD_FAILED");
+      expect((result as any).error.message).toContain("not in the trusted issuers whitelist");
+    });
+
+    it("allows all issuers when trustedIssuers is empty array", async () => {
+      const { getAssetBalances } = await import("../account/getAssetBalances");
+      const { getAccount } = await import("../account/getAccount");
+      const { ok } = await import("../shared/response");
+
+      const account = {
+        publicKey: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWNA",
+        displayAddress: "GAAZI...CWNA",
+        sequence: "1",
+        subentryCount: 0,
+        balances: [
+          { assetType: "native" as const, assetCode: "XLM", assetIssuer: null, balance: "100", balanceFloat: 100 },
+          { assetType: "credit_alphanum4" as const, assetCode: "USDC", assetIssuer: "GBUQWP3BOUZX34ULNQG23RQ6F4YUSXHTQSXUSMIQ75XABEE3XZNIXUAA", balance: "50", balanceFloat: 50 },
+        ],
+      };
+
+      vi.mocked(getAccount).mockResolvedValueOnce(ok(account));
+
+      const result = await getAssetBalances("http://horizon", account.publicKey, undefined, []);
+
+      expect(result.status).toBe("ok");
+      expect((result as any).data).toHaveLength(2);
+    });
+  });
 });

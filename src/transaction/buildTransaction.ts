@@ -9,6 +9,7 @@ import {
 import { ok, err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import { toMessage } from "../shared";
+import { validateIssuer } from "../shared/validateIssuer";
 import { DEFAULT_TX_TIMEOUT_SECONDS } from "../shared/constants";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type {
@@ -46,9 +47,30 @@ export async function buildPaymentTransaction(
   networkConfig: ResolvedNetworkConfig,
   sourcePublicKey: string,
   params: PaymentParams,
+  trustedIssuers?: string[] | null,
 ): Promise<SorokitResult<string>> {
   const assetResult = resolveAsset(params.assetCode, params.assetIssuer);
   if (assetResult.status === "error") return assetResult;
+
+  // Validate issuer against whitelist if configured and not native
+  if (
+    params.assetCode &&
+    params.assetCode.toUpperCase() !== "XLM" &&
+    params.assetIssuer &&
+    trustedIssuers !== null &&
+    trustedIssuers !== undefined &&
+    trustedIssuers.length > 0
+  ) {
+    try {
+      validateIssuer(params.assetIssuer, trustedIssuers);
+    } catch (cause: unknown) {
+      return err(
+        SorokitErrorCode.TX_BUILD_FAILED,
+        (cause as Error)?.message || String(cause),
+        cause,
+      );
+    }
+  }
 
   try {
     const server = new Horizon.Server(horizonUrl);
@@ -125,7 +147,25 @@ export async function buildTrustlineTransaction(
   networkConfig: ResolvedNetworkConfig,
   sourcePublicKey: string,
   params: TrustlineParams,
+  trustedIssuers?: string[] | null,
 ): Promise<SorokitResult<string>> {
+  // Validate issuer against whitelist if configured
+  if (
+    trustedIssuers !== null &&
+    trustedIssuers !== undefined &&
+    trustedIssuers.length > 0
+  ) {
+    try {
+      validateIssuer(params.assetIssuer, trustedIssuers);
+    } catch (cause: unknown) {
+      return err(
+        SorokitErrorCode.TX_BUILD_FAILED,
+        (cause as Error)?.message || String(cause),
+        cause,
+      );
+    }
+  }
+
   try {
     const server = new Horizon.Server(horizonUrl);
     const sourceAccount = await server.loadAccount(sourcePublicKey);
