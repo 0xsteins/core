@@ -2,6 +2,7 @@ import { rpc as SorobanRpc, TransactionBuilder } from "@stellar/stellar-sdk";
 import { ok, err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import { toMessage, sleep } from "../shared";
+import type { SorokitLogger } from "../shared/logger";
 import {
   DEFAULT_POLL_MAX_ATTEMPTS,
   DEFAULT_POLL_INTERVAL_MS,
@@ -25,7 +26,13 @@ export async function executeContract(
   networkConfig: ResolvedNetworkConfig,
   signedXdr: string,
   pollConfig?: SorobanPollConfig,
+  logger?: SorokitLogger,
 ): Promise<SorokitResult<string>> {
+  logger?.debug("soroban.execute", {
+    operation: "soroban.execute",
+    status: "start",
+  });
+
   // ── Submit ─────────────────────────────────────────────────────────────────
   let hash: string;
   try {
@@ -37,58 +44,116 @@ export async function executeContract(
     const sendResult = await rpc.sendTransaction(tx);
 
     if (sendResult.status === "ERROR") {
+      const message = `Contract invocation failed on submission: ${
+        sendResult.errorResult?.toXDR() ?? "unknown error"
+      }`;
+      logger?.warn("soroban.execute.submit", {
+        operation: "soroban.execute.submit",
+        status: "error",
+        errorMessage: message,
+      });
       return err(
         SorokitErrorCode.CONTRACT_INVOKE_FAILED,
-        `Contract invocation failed on submission: ${
-          sendResult.errorResult?.toXDR() ?? "unknown error"
-        }`,
+        message,
         sendResult,
       );
     }
 
     hash = sendResult.hash;
+    logger?.info("soroban.execute.submit", {
+      operation: "soroban.execute.submit",
+      status: "ok",
+      hash,
+    });
   } catch (cause) {
-    return err(
-      SorokitErrorCode.CONTRACT_INVOKE_FAILED,
-      `Failed to submit contract transaction: ${toMessage(cause)}`,
-      cause,
-    );
+    const message = `Failed to submit contract transaction: ${toMessage(cause)}`;
+    logger?.warn("soroban.execute.submit", {
+      operation: "soroban.execute.submit",
+      status: "error",
+      errorMessage: message,
+    });
+    return err(SorokitErrorCode.CONTRACT_INVOKE_FAILED, message, cause);
   }
 
   // ── Poll ───────────────────────────────────────────────────────────────────
   const maxAttempts = pollConfig?.maxAttempts ?? DEFAULT_POLL_MAX_ATTEMPTS;
   const intervalMs = pollConfig?.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
+  logger?.debug("soroban.execute.poll", {
+    operation: "soroban.execute.poll",
+    status: "start",
+    hash,
+    maxAttempts,
+    intervalMs,
+  });
+
   try {
     const rpc = new SorobanRpc.Server(rpcUrl);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await sleep(intervalMs);
+      logger?.debug("soroban.execute.poll.attempt", {
+        operation: "soroban.execute.poll.attempt",
+        status: "start",
+        hash,
+        attempt: attempt + 1,
+        maxAttempts,
+      });
+
       const statusResult = await rpc.getTransaction(hash);
 
       if (statusResult.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        logger?.info("soroban.execute.poll", {
+          operation: "soroban.execute.poll",
+          status: "ok",
+          hash,
+          attempt: attempt + 1,
+        });
         return ok(hash);
       }
 
       if (statusResult.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
+        const message = `Contract transaction failed on-chain: ${hash}`;
+        logger?.warn("soroban.execute.poll", {
+          operation: "soroban.execute.poll",
+          status: "error",
+          hash,
+          attempt: attempt + 1,
+          errorMessage: message,
+        });
         return err(
           SorokitErrorCode.CONTRACT_INVOKE_FAILED,
-          `Contract transaction failed on-chain: ${hash}`,
+          message,
           statusResult,
         );
       }
+
+      logger?.debug("soroban.execute.poll.attempt", {
+        operation: "soroban.execute.poll.attempt",
+        status: "ok",
+        hash,
+        attempt: attempt + 1,
+        txStatus: "PENDING",
+      });
       // PENDING — continue polling
     }
 
-    return err(
-      SorokitErrorCode.CONTRACT_INVOKE_FAILED,
-      `Contract transaction timed out after ${maxAttempts} attempts: ${hash}`,
-    );
+    const message = `Contract transaction timed out after ${maxAttempts} attempts: ${hash}`;
+    logger?.warn("soroban.execute.poll", {
+      operation: "soroban.execute.poll",
+      status: "error",
+      hash,
+      errorMessage: message,
+    });
+    return err(SorokitErrorCode.CONTRACT_INVOKE_FAILED, message);
   } catch (cause) {
-    return err(
-      SorokitErrorCode.CONTRACT_INVOKE_FAILED,
-      `Error while polling contract transaction: ${toMessage(cause)}`,
-      cause,
-    );
+    const message = `Error while polling contract transaction: ${toMessage(cause)}`;
+    logger?.warn("soroban.execute.poll", {
+      operation: "soroban.execute.poll",
+      status: "error",
+      hash,
+      errorMessage: message,
+    });
+    return err(SorokitErrorCode.CONTRACT_INVOKE_FAILED, message, cause);
   }
 }

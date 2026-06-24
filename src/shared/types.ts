@@ -9,7 +9,7 @@
  */
 
 export type { SorokitResult, SorokitError, SorokitErrorCode } from "./response";
-export type { SorokitLogger, LogLevel } from "./logger";
+export type { SorokitLogger, LogLevel, LoggerConfig } from "./logger";
 export type { SorokitCache } from "./cache";
 
 /**

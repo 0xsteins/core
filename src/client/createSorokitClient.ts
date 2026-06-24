@@ -32,11 +32,11 @@ import { simulateTransaction } from "../soroban/simulateTransaction";
 import { executeContract } from "../soroban/executeContract";
 import { invokeContract } from "../soroban/invokeContract";
 import { getContractMethods } from "../soroban/contractMetadata";
-import { createLogger } from "../shared/logger";
+import { createLogger, withLogging } from "../shared/logger";
 import { formatAddress } from "../shared/utils";
 import { ok } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
-import type { SorokitLogger } from "../shared/logger";
+import type { LogLevel, SorokitLogger } from "../shared/logger";
 import type { SorokitCache } from "../shared/cache";
 import type { ResolvedNetworkConfig } from "../shared/types";
 import type { NetworkType } from "../network/config";
@@ -54,7 +54,7 @@ import type {
   AccountCreateParams,
   TransactionResult,
 } from "../transaction/types";
-import type { FeeEstimate, FeeEstimateInput } from "../transaction/estimateFee";
+import type { FeeEstimate, FeeEstimateInput, FeeEstimateOptions } from "../transaction/estimateFee";
 import type {
   TransactionStreamConfig,
   TransactionPage,
@@ -80,12 +80,22 @@ export interface SorokitClientConfig {
   rpcUrl?: string;
   /** Optional cache implementation — core is stateless by default */
   cache?: SorokitCache;
-  /** Enable debug logging to console. Default: false */
+  /**
+   * Minimum log level to emit. Default: "off"
+   * Set to "debug" for verbose tracing of all SDK operations.
+   */
+  logLevel?: LogLevel;
+  /**
+   * Enable debug logging to console. Equivalent to `logLevel: "debug"`.
+   * @deprecated Prefer `logLevel: "debug"`
+   */
   debug?: boolean;
   /** Custom logger — overrides the built-in console logger */
   logger?: SorokitLogger;
   /** Default Soroban polling config — can be overridden per-call */
   sorobanPoll?: SorobanPollConfig;
+  /** Invoked when estimateFee detects a fee surge (>2x recent median) */
+  onFeeSurge?: FeeEstimateOptions["onFeeSurge"];
 }
 
 // ─── Client interface ─────────────────────────────────────────────────────────
@@ -259,10 +269,22 @@ export function createSorokitClient(
 
   const networkConfig = networkResult.data;
   const { horizonUrl, rpcUrl, networkPassphrase } = networkConfig;
-  const logger = createLogger(config.debug ?? false, config.logger);
+  const logger =
+    config.logger ??
+    createLogger({
+      logLevel: config.logLevel ?? (config.debug ? "debug" : "off"),
+    });
   const defaultPollConfig = config.sorobanPoll;
+  const feeEstimateOptions: FeeEstimateOptions = {
+    ...(config.cache !== undefined ? { cache: config.cache } : {}),
+    ...(config.onFeeSurge !== undefined
+      ? { onFeeSurge: config.onFeeSurge }
+      : {}),
+  };
 
-  logger.debug("Client created", {
+  logger.info("client.create", {
+    operation: "client.create",
+    status: "ok",
     network: config.network,
     horizonUrl,
     rpcUrl,
@@ -272,40 +294,39 @@ export function createSorokitClient(
     networkConfig,
 
     wallet: {
-      connect: (adapter) => {
-        logger.debug("wallet.connect", { walletType: adapter.walletType });
-        return connectWallet(adapter);
-      },
-      disconnect: (adapter) => {
-        logger.debug("wallet.disconnect", { walletType: adapter.walletType });
-        return disconnectWallet(adapter);
-      },
-      signTransaction: (adapter, input) => {
-        logger.debug("wallet.signTransaction", {
-          walletType: adapter.walletType,
-        });
-        return signTransaction(adapter, input);
-      },
+      connect: (adapter) =>
+        withLogging(logger, "wallet.connect", { walletType: adapter.walletType }, () =>
+          connectWallet(adapter),
+        ),
+      disconnect: (adapter) =>
+        withLogging(logger, "wallet.disconnect", { walletType: adapter.walletType }, () =>
+          disconnectWallet(adapter),
+        ),
+      signTransaction: (adapter, input) =>
+        withLogging(
+          logger,
+          "wallet.signTransaction",
+          { walletType: adapter.walletType },
+          () => signTransaction(adapter, input),
+        ),
       emptyState: () => emptyWalletState(),
     },
 
     account: {
-      get: (publicKey) => {
-        logger.debug("account.get", { publicKey });
-        return getAccount(horizonUrl, publicKey);
-      },
-      getBalances: (publicKey) => {
-        logger.debug("account.getBalances", { publicKey });
-        return getBalances(horizonUrl, publicKey);
-      },
-      getAssetBalances: (publicKey, filter) => {
-        logger.debug("account.getAssetBalances", { publicKey, filter });
-        return getAssetBalances(horizonUrl, publicKey, filter);
-      },
-      stream: (publicKey, config, signal) => {
-        logger.debug("account.stream", { publicKey });
-        return streamAccount(horizonUrl, publicKey, config, signal);
-      },
+      get: (publicKey) =>
+        withLogging(logger, "account.get", { publicKey }, () =>
+          getAccount(horizonUrl, publicKey),
+        ),
+      getBalances: (publicKey) =>
+        withLogging(logger, "account.getBalances", { publicKey }, () =>
+          getBalances(horizonUrl, publicKey),
+        ),
+      getAssetBalances: (publicKey, filter) =>
+        withLogging(logger, "account.getAssetBalances", { publicKey, filter }, () =>
+          getAssetBalances(horizonUrl, publicKey, filter),
+        ),
+      stream: (publicKey, streamConfig, signal) =>
+        streamAccount(horizonUrl, publicKey, streamConfig, signal, logger),
       formatAddress: (publicKey, chars) => formatAddress(publicKey, chars),
     },
 
@@ -347,7 +368,13 @@ export function createSorokitClient(
       },
       estimateFee: (input) => {
         logger.debug("transaction.estimateFee");
-        return estimateFee(rpcUrl, horizonUrl, networkConfig, input);
+        return estimateFee(
+          rpcUrl,
+          horizonUrl,
+          networkConfig,
+          input,
+          feeEstimateOptions,
+        );
       },
       stream: (publicKey, config, signal) => {
         logger.debug("transaction.stream", { publicKey });
@@ -356,54 +383,59 @@ export function createSorokitClient(
     },
 
     soroban: {
-      getContractMethods: (contractId, ttlMs) => {
-        logger.debug("soroban.getContractMethods", { contractId });
-        return getContractMethods(rpcUrl, contractId, {
-          ...(config.cache && { cache: config.cache }),
-          ...(ttlMs !== undefined && { ttlMs }),
-        });
-      },
-      simulate: (transactionXdr) => {
-        logger.debug("soroban.simulate");
-        return simulateTransaction(rpcUrl, networkPassphrase, transactionXdr);
-      },
-      prepare: (params) => {
-        logger.debug("soroban.prepare", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return prepareContractCall(rpcUrl, networkConfig, horizonUrl, params);
-      },
-      execute: (signedXdr, pollConfig) => {
-        logger.debug("soroban.execute");
-        return executeContract(
+      getContractMethods: (contractId, ttlMs) =>
+        withLogging(
+          logger,
+          "soroban.getContractMethods",
+          { contractId },
+          () =>
+            getContractMethods(rpcUrl, contractId, {
+              ...(config.cache && { cache: config.cache }),
+              ...(ttlMs !== undefined && { ttlMs }),
+            }),
+        ),
+      simulate: (transactionXdr) =>
+        withLogging(logger, "soroban.simulate", undefined, () =>
+          simulateTransaction(rpcUrl, networkPassphrase, transactionXdr),
+        ),
+      prepare: (params) =>
+        withLogging(
+          logger,
+          "soroban.prepare",
+          { contractId: params.contractId, method: params.method },
+          () => prepareContractCall(rpcUrl, networkConfig, horizonUrl, params),
+        ),
+      execute: (signedXdr, pollConfig) =>
+        executeContract(
           rpcUrl,
           networkConfig,
           signedXdr,
           pollConfig ?? defaultPollConfig,
-        );
-      },
-      invoke: (params, signFn, pollConfig) => {
-        logger.debug("soroban.invoke", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return invokeContract(
-          rpcUrl,
-          networkConfig,
-          horizonUrl,
-          params,
-          signFn,
-          pollConfig ?? defaultPollConfig,
-        );
-      },
-      read: (params) => {
-        logger.debug("soroban.read", {
-          contractId: params.contractId,
-          method: params.method,
-        });
-        return readContract(rpcUrl, horizonUrl, networkConfig, params);
-      },
+          logger,
+        ),
+      invoke: (params, signFn, pollConfig) =>
+        withLogging(
+          logger,
+          "soroban.invoke",
+          { contractId: params.contractId, method: params.method },
+          () =>
+            invokeContract(
+              rpcUrl,
+              networkConfig,
+              horizonUrl,
+              params,
+              signFn,
+              pollConfig ?? defaultPollConfig,
+              logger,
+            ),
+        ),
+      read: (params) =>
+        withLogging(
+          logger,
+          "soroban.read",
+          { contractId: params.contractId, method: params.method },
+          () => readContract(rpcUrl, horizonUrl, networkConfig, params),
+        ),
     },
 
     network: {
