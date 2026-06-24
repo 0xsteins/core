@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deepEqual, formatAddress } from "../shared/utils";
+import { formatAddress } from "../shared/utils";
 import { ok } from "../shared/response";
 import type { AccountInfo } from "../account/types";
 
@@ -40,6 +40,15 @@ function createAccount(sequence: string): AccountInfo {
     subentryCount: 0,
     balances: [],
   };
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 beforeEach(() => {

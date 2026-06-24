@@ -1,7 +1,6 @@
 import { ok, err, SorokitErrorCode } from "../shared/response";
 import type { SorokitResult } from "../shared/response";
 import { sleep, toMessage } from "../shared";
-import { deepEqual } from "../shared/utils";
 import type { SorokitLogger } from "../shared/logger";
 import type { AccountInfo } from "./types";
 import { getAccount } from "./getAccount";
@@ -9,6 +8,15 @@ import { getAccount } from "./getAccount";
 const MIN_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const ADAPTIVE_INTERVAL_STEP_MS = 1_000;
+
+function sameSnapshot(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Configuration for account streaming.
@@ -183,7 +191,7 @@ export async function* streamAccount(
 
       if (result.status === "ok") {
         const hasBaseline = lastEmitted !== undefined;
-        const changed = !hasBaseline || !deepEqual(lastEmitted, result.data);
+        const changed = !hasBaseline || !sameSnapshot(lastEmitted, result.data);
         if (hasBaseline) adjustInterval(changed);
 
         if (changed) {
