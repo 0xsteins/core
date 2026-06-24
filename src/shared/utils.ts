@@ -4,6 +4,7 @@
  */
 
 import { DEFAULT_ADDRESS_DISPLAY_CHARS } from "./constants";
+import { isTransientError } from "./errors";
 
 /**
  * Detect whether we are running in a browser environment.
@@ -49,14 +50,65 @@ export function isValidContractId(id: string): boolean {
 }
 
 /**
- * Deep equality check using JSON serialisation.
- * Sufficient for plain data objects with no circular references or functions.
+ * Retry configuration for exponential backoff.
  */
-export function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  try {
-    return JSON.stringify(a) === JSON.stringify(b);
-  } catch {
-    return false;
+export interface RetryConfig {
+  /** Maximum number of retry attempts */
+  maxAttempts?: number;
+  /** Initial delay in milliseconds before first retry */
+  initialDelayMs?: number;
+  /** Whether to add random jitter to delay (recommended) */
+  jitter?: boolean;
+}
+
+/**
+ * Default retry configuration.
+ */
+const DEFAULT_RETRY_CONFIG: Required<RetryConfig> = {
+  maxAttempts: 3,
+  initialDelayMs: 100,
+  jitter: true,
+};
+
+/**
+ * Retry an async function with exponential backoff and optional jitter.
+ * Only retries on transient errors (timeouts, network issues, 5xx).
+ * Does not retry on permanent errors (404, invalid params).
+ *
+ * @param fn - Async function to retry
+ * @param config - Retry configuration
+ * @returns Result of the function or last error after exhausting retries
+ */
+export async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  config: RetryConfig = {},
+): Promise<T> {
+  const { maxAttempts, initialDelayMs, jitter } = {
+    ...DEFAULT_RETRY_CONFIG,
+    ...config,
+  };
+
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      if (!isTransientError(error)) {
+        throw error;
+      }
+
+      if (attempt < maxAttempts - 1) {
+        const baseDelay = initialDelayMs * Math.pow(2, attempt);
+        const jitterMs = jitter ? Math.random() * baseDelay * 0.1 : 0;
+        const delay = baseDelay + jitterMs;
+
+        await sleep(delay);
+      }
+    }
   }
+
+  throw lastError;
 }
