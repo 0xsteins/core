@@ -67,6 +67,8 @@ export type {
   SimulateTransactionResult,
 } from "./soroban/types";
 export { subscribeContractEvents } from "./soroban/subscribeContractEvents";
+export { buildContractDeploy } from "./soroban/deployContract";
+export type { BuildContractDeployOptions } from "./soroban/deployContract";
 export type {
   ContractEvent,
   ContractEventFilter,

@@ -7,6 +7,7 @@ import { getContractMethods } from "../soroban/contractMetadata";
 import { prepareContractCall } from "../soroban/prepareCall";
 import { readContract } from "../soroban/readContract";
 import { subscribeContractEvents } from "../soroban/subscribeContractEvents";
+import { buildContractDeploy } from "../soroban/deployContract";
 import { SorokitErrorCode } from "../shared/response";
 
 const {
@@ -634,5 +635,55 @@ describe("soroban contract ABI validation", () => {
       expect(result.error.message).toContain("Invalid contract ABI");
     }
     expect(mockSimulateTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildContractDeploy", () => {
+  beforeEach(() => {
+    mockGetLedgerEntries.mockReset();
+    resetRpcSimulationMocks();
+  });
+
+  const validWasm = Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+
+  it("returns TX_BUILD_FAILED if WASM size exceeds maximum", async () => {
+    const hugeWasm = Buffer.alloc(256 * 1024 + 1, 0x00);
+    const result = await buildContractDeploy(hugeWasm, Keypair.random().publicKey(), {
+      rpcUrl: networkConfig.rpcUrl,
+      horizonUrl: networkConfig.horizonUrl,
+      networkConfig,
+    });
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error.code).toBe(SorokitErrorCode.TX_BUILD_FAILED);
+      expect(result.error.message).toContain("exceeds max size");
+    }
+  });
+
+  it("returns TX_BUILD_FAILED if WASM magic bytes are missing", async () => {
+    const invalidWasm = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    const result = await buildContractDeploy(invalidWasm, Keypair.random().publicKey(), {
+      rpcUrl: networkConfig.rpcUrl,
+      horizonUrl: networkConfig.horizonUrl,
+      networkConfig,
+    });
+    expect(result.status).toBe("error");
+    if (result.status === "error") {
+      expect(result.error.code).toBe(SorokitErrorCode.TX_BUILD_FAILED);
+      expect(result.error.message).toContain("missing magic bytes");
+    }
+  });
+
+  it("successfully builds contract deployment XDR", async () => {
+    const result = await buildContractDeploy(validWasm, Keypair.random().publicKey(), {
+      rpcUrl: networkConfig.rpcUrl,
+      horizonUrl: networkConfig.horizonUrl,
+      networkConfig,
+    });
+    expect(result.status).toBe("ok");
+    expect(mockSimulateTransaction).toHaveBeenCalledOnce();
+    if (result.status === "ok") {
+      expect(result.data.transactionXdr).toBeDefined();
+    }
   });
 });
